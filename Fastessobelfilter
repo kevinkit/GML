@@ -1,0 +1,350 @@
+//---------------------------------------------------------------------
+// AUFGABE 1
+//
+//   Schreiben Sie ein Programm, welches eine Sobelfilterung auf einem
+//   Eingabebild durchführt und das Ergebnisbild abspeichert.
+//
+//     Eingabe:
+//       Dateiname des Eingangsbilds (Grauwertbild als Bitmap)
+//       Verstärkungsfaktor für das Sobelbild
+//
+//     Ausgabe:
+//       Dateiname des Ergebnisbilds (Grauwertbild als Bitmap)
+//       Rechenzeit auf GPU / Rechenzeit auf CPU
+//
+// Version:
+// Bearbeiter:
+//---------------------------------------------------------------------
+
+// include for standard in/output (standard C)
+#include <stdio.h>
+
+// include for CUDA runtime API
+#include <cuda_runtime_api.h>
+
+// include for CUDA utilities
+#include "cutil.h"
+#include <math.h>
+
+// define path for the bitmap files
+#define IMAGE "schrank.pgm"
+#define RESULT_CPU "result_cpu.pgm"
+#define RESULT_GPU "result_gpu.pgm"
+
+// the factor for the sobel image
+
+
+#ifndef M_SQRT2
+#define M_SQRT2 1.4142135623730950488016887
+#endif
+
+float scale = 1.0;
+//---------------------------------------------------------------------
+// computeSobel() computer sobel operator for one pixel
+//---------------------------------------------------------------------
+__device__ __host__ unsigned char computeSobel(
+  unsigned char tl,  // top left
+  unsigned char tm,  // top middle
+  unsigned char tr,  // top right
+  unsigned char ml,  // middle left
+  unsigned char mm,  // middle middle
+  unsigned char mr,  // middle right
+  unsigned char dl,  // down left
+  unsigned char dm,  // down middle
+  unsigned char dr,  // down right
+  float scale
+)
+{
+//++++++++++ HIER DIE SOBEL FUNKTION PROGRAMMIEREN (BEGIN) +++++++++
+  float retvalue;
+  int returnpixel;
+  int horizontal;
+  int vertical;
+
+  horizontal = -tl  - (ml << 1) - dl + tr + (mr << 1) + dr; 
+//  horizontal = tl + 2*ml + dl - tr + 2*mr - dr;
+  vertical = -tl + dl - (tm << 1) + (dm << 1) - tr + dr; 
+  
+
+ // retvalue = horizontal;
+ retvalue =  sqrt((float)(horizontal*horizontal + vertical * vertical));
+ mm = (unsigned char)( (retvalue * scale )/4.0f/M_SQRT2);
+ //mm = (unsigned char)retvalue;
+ 
+ if(mm > 255)
+ {
+	 return 255;
+ }
+ else if(retvalue < 0.0)
+ {
+	 return 0;
+ }
+
+  return mm;
+//++++++++++ HIER DIE SOBEL FUNKTION PROGRAMMIEREN (END) +++++++++
+}
+
+//---------------------------------------------------------------------
+// sobelFilter() kernel function for sobel filter of an image
+//---------------------------------------------------------------------
+__global__ void sobelFilterGPU(uchar4 *dImage,uchar4 *dResult, unsigned int w, unsigned int h, float s)
+{
+//++++++++++ HIER DEN KERNEL SCHREIBEN (BEGIN) +++++++++
+  unsigned int x1 = threadIdx.x   + blockIdx.x * 16;
+  unsigned int y1 = threadIdx.y  + blockIdx.y * 16;
+
+  unsigned int x = threadIdx.x;
+  unsigned int y = threadIdx.y;
+
+  
+  __shared__ uchar4 sBlock[16 + 2][16 + 2];
+  
+
+  if((x1 < w) && (y1 < h))
+  {
+	
+	  sBlock[x][y] = dImage[x1 + y1*w];
+  }
+  __syncthreads();
+
+  if((threadIdx.x > 0) && (threadIdx.x < blockDim.x -1 ) && (threadIdx.y > 0) && (threadIdx.y < blockDim.y -1 ))
+  {
+	if((x1 > 0) && (x1 < w-1) && (y1 > 0) && (y1 < h -1))
+	{
+
+		//Fehler liegt irgendwo beim MAtrix zugriff
+		dResult[x1+y1*w].x = computeSobel(	sBlock[x-1][y-1].w,	sBlock[x][y-1].x,	sBlock[x][y-1].y,
+											sBlock[x-1][y].w,	sBlock[x][y].x,		sBlock[x][y].y,
+											sBlock[x-1][y+1].w,	sBlock[x][y+1].x,	sBlock[x][y+1].y,
+											s);
+		dResult[x1+y1*w].y = computeSobel(	sBlock[x][y-1].x,	sBlock[x][y-1].y,	sBlock[x][y-1].z,
+											sBlock[x][y].x,	sBlock[x][y].y,		sBlock[x][y].z,
+											sBlock[x][y+1].x,	sBlock[x][y+1].y,	sBlock[x][y+1].z,
+											s);  
+											
+		dResult[x1+y1*w].z = computeSobel(	sBlock[x][y-1].y,	sBlock[x][y-1].z,	sBlock[x][y-1].w,
+											sBlock[x][y].y,	sBlock[x][y].z,		sBlock[x][y].w,
+											sBlock[x][y+1].y,	sBlock[x][y+1].z,	sBlock[x][y+1].w,
+											s);  
+											
+		dResult[x1+y1*w].w = computeSobel(	sBlock[x][y-1].z,	sBlock[x][y-1].w,	sBlock[x+1][y-1].x,
+											sBlock[x][y].z,	sBlock[x][y].w,		sBlock[x+1][y].x,
+											sBlock[x][y+1].z,	sBlock[x][y+1].w,	sBlock[x+1][y+1].x,
+											s);
+
+	}
+  }
+  
+
+  //x > 0 , x < w -1 && y > 0 && y < h -1
+//  if((x1 > 0) && (x1 < w-1) && (y1 > 0) && (y1 < h -1))
+//  {
+//		
+//	 
+//
+//	  /*dResult[x+y*w].x = computeSobel( dImage[(x-1)+(y-1)*w].w, dImage[x+(y-1)*w].x, dImage[x+(y-1)*w].y,
+//											dImage[(x-1)+(y*w)].w, dImage[(x+y*w)].x,  dImage[(x+y*w)].y,
+//											dImage[(x-1)+(y+1)*w].w, dImage[(x+(y+1)*w)].x, dImage[(x+(y+1)*w)].y,
+//											s);
+//
+//
+//  	  dResult[x+(y)*w].y = computeSobel(	dImage[x+(y-1)*w].x, dImage[x+(y-1)*w].y, dImage[x+(y-1)*w].z,
+//											dImage[(x+y*w)].x, dImage[(x+y*w)].y,  dImage[(x+y*w)].z,
+//											dImage[(x+(y+1)*w)].x, dImage[(x+(y+1)*w)].y, dImage[(x+(y+1)*w)].z,
+//											s);
+//
+//	  dResult[x+(y)*w].z = computeSobel(	dImage[x+(y-1)*w].y, dImage[x+(y-1)*w].z, dImage[x+(y-1)*w].w,
+//											dImage[(x+y*w)].y, dImage[(x+y*w)].z,  dImage[(x+y*w)].w,
+//											dImage[(x+(y+1)*w)].y, dImage[(x+(y+1)*w)].z, dImage[(x+(y+1)*w)].w,
+//											s);
+//
+//	      
+//	  dResult[x+(y)*w].w = computeSobel(	dImage[x+(y-1)*w].z, dImage[x+(y-1)*w].w, dImage[(x+1)+(y-1)*w].x,
+//											dImage[(x+y*w)].z, dImage[(x+y*w)].w,  dImage[((x+1)+y*w)].x,
+//											dImage[(x+(y+1)*w)].z, dImage[(x+(y+1)*w)].w, dImage[((x+1)+(y+1)*w)].x,
+//											s);
+//*/
+//	  
+//	
+//  }
+//  else
+//  {
+//	  //dResult[x+y*w].w = 0;
+//	  //dResult[x+y*w].x = 0;
+//	  //dResult[x+y*w].y = 0;
+//	  //dResult[x+y*w].z = 0;
+//
+//  }
+ //++++++++++ HIER DEN KERNEL SCHREIBEN (END) +++++++++
+}
+
+//---------------------------------------------------------------------
+// initMemory() allocate memory on CPU and GPU and load input image
+//---------------------------------------------------------------------
+int initMemory (unsigned char **hImage,
+                unsigned char **hResult,
+                unsigned char **dImage,
+                unsigned char **dResult,
+                unsigned int *w,
+                unsigned int *h)
+{
+  unsigned int rawDataSize;       // imagesize in uchar
+
+  // open and read the spezified image; width and heigh will be set; see cutFree
+  if (cutLoadPGMub (IMAGE, (unsigned char**)hImage, w, h) != CUTTrue)
+  {
+    return -1;
+  }
+
+  rawDataSize = (*w) * (*h) * sizeof (unsigned char);      // the imagesize in bytes
+  cudaMalloc((void**) dResult, rawDataSize);         // device result memory 1texel := 8bit
+  cudaMalloc((void**) dImage, rawDataSize);          // device result memory 1texel := 8bit
+  cudaMemset(*dResult, 0, rawDataSize);              // clear result memory
+  *hResult = (unsigned char*) malloc (rawDataSize);  // rotated image on host memory (result)
+
+  return 0;
+}
+
+//---------------------------------------------------------------------
+// cleanUp() free allocated memory on CPU and GPU
+//---------------------------------------------------------------------
+void cleanUp (unsigned char *hImage,
+              unsigned char *hResult,
+              unsigned char *dImage,
+              unsigned char *dResult)
+{
+  cutFree(hImage);
+  free(hResult);          // free host memory see malloc
+  cudaFree(dImage);       // free input memory see cudaMalloc
+  cudaFree(dResult);      // free output memory see cudaMalloc
+}
+
+//---------------------------------------------------------------------
+// sobelFilterCPU() calculate sobel filter on CPU
+/*  unsigned char tl,  // top left
+  unsigned char tm,  // top middle
+  unsigned char tr,  // top right
+  unsigned char ml,  // middle left
+  unsigned char mm,  // middle middle
+  unsigned char mr,  // middle right
+  unsigned char dl,  // down left
+  unsigned char dm,  // down middle
+  unsigned char dr,  // down right
+  float scale*/
+//---------------------------------------------------------------------
+void sobelFilterCPU(unsigned char *hImage, unsigned char *hResult, int w, int h, float s)
+{
+
+for (int y = 1; y < h-1; y++)
+  {
+    for (int x = 1; x < w-1; x++)
+    {
+      //++++++++++ HIER DEN SOBEL FILTER AUFRUFEN (BEGIN) +++++++++
+        
+		hResult[x+y*w] = computeSobel(hImage[(x-1 + (y-1) *w)],
+										hImage[(x+(y-1)*w)],
+										hImage[(x+1 + (y-1) * w)],
+										hImage[(x-1 + y*w)],
+										hImage[x+y*w], 
+										hImage[(x+1+y*w)],
+										hImage[(x-1 + (y+1)*w)],
+										hImage[(x + (y+1) * w)],
+										hImage[((x+1) + (y+1) *w)],
+										s);
+      //++++++++++ HIER DEN SOBEL FILTER AUFRUFEN (END) +++++++++
+    }
+  }
+}
+
+//---------------------------------------------------------------------
+// main() main program that runs on the host (CPU)
+//---------------------------------------------------------------------
+int main (int argc, char** argv)
+{
+  unsigned int width;             // the image width
+  unsigned int height;            // the image height
+  unsigned int timer;             // timer ID
+  unsigned int timer_2;
+  unsigned char *hImage = NULL;   // host input picture
+  unsigned char *hResult = NULL;  // host filtered picture
+  unsigned char *dImage = NULL;   // device global memory; source picture
+  unsigned char *dResult = NULL;  // device global memory; filtered picture
+
+
+  
+  
+
+  cutCreateTimer (&timer); // allocate a gpu timer
+  cutCreateTimer (&timer_2); //allocate another timer...
+  //alloc memory for host and device; read the input pictures to gpu memory
+ if (initMemory(&hImage, &hResult, &dImage, &dResult, &width, &height) != 0)
+  {
+    printf("Error loading input image! Exiting...\n");
+    return -1;
+  }
+  
+  // copy source image from host to device
+  cutResetTimer(timer_2);
+  cutStartTimer(timer_2);
+  cudaMemcpy(dImage, hImage, width * height * sizeof (unsigned char), cudaMemcpyHostToDevice);
+  cutStopTimer(timer_2);
+ 
+  //printf("From Host to GPU:%f\n", cutGetTimerValue (timer_2));
+  cutResetTimer(timer_2);
+//++++++++++ HIER DEN KERNEL AUFRUF ERGÄNZEN (BEGIN) +++++++++
+  
+  cutResetTimer (timer); // initialize the timer
+  cutStartTimer (timer); // start the gpu timer
+  printf("\n%d\n",width);
+
+  dim3 blockDim(16 + 2,16 + 2);
+  dim3 gridDim(width/(16*4), height/(16));
+  sobelFilterGPU<<<gridDim,blockDim>>>((uchar4*) dImage, (uchar4*) dResult,(width/4),height,scale);
+//++++++++++ HIER DEN KERNEL AUFRUF ERGÄNZEN (END) +++++++++
+
+  // wait until all threads on the kernel have finished
+  cudaThreadSynchronize ();
+
+//++++++++++ HIER FEHLER ABFANGEN (BEGIN) +++++++++
+  cudaError_t error_t = cudaGetLastError();
+  if(error_t != cudaSuccess)
+	printf("%s\n",cudaGetErrorString(error_t));
+//++++++++++ HIER FEHLER ABFANGEN (END) +++++++++
+
+  // print algorithm time duration
+  cutStopTimer (timer);    //stop timer counter
+  printf ("GPU execution time %f\n", cutGetTimerValue (timer));
+
+  cutResetTimer(timer);
+  cutStartTimer(timer);
+  // copy result image from device to host
+  cudaMemcpy(hResult, dResult, width * height * sizeof (unsigned char), cudaMemcpyDeviceToHost);
+  cutStopTimer (timer);
+  //printf("FROM GPU to Host %f\n", cutGetTimerValue (timer));
+  // store the result image in specified folder
+  cutSavePGMub(RESULT_GPU, hResult, width, height);
+
+  cutResetTimer (timer);    // reset the timer to zero
+  cutStartTimer (timer);    // restart the timer
+
+  // calculate sobel filter on cpu
+  sobelFilterCPU(hImage, hResult, width, height, scale);
+
+  // print algorithm time duration
+  cutStopTimer (timer);    //stop timer counter
+  //printf ("CPU execution time %f\n", cutGetTimerValue (timer));
+
+  // store the result image in specified folder
+ cutSavePGMub(RESULT_CPU, hResult, width, height);
+
+  // free the gpu timer
+  cutDeleteTimer (timer);
+  cutDeleteTimer (timer_2);
+  //free device and host resources
+  cleanUp(hImage, hResult, dImage, dResult);
+  printf("hello!");
+  getchar();
+  printf ("done\n");
+  printf ("%d", width*height);
+  return 0;
+}
