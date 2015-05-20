@@ -1,0 +1,109 @@
+#ifndef DS_SAVITZKY_GOLAY_25_H
+#define DS_SAVITZKY_GOLAY_25_H
+
+#include "DSDefinesGPU.h"
+#include "DSDefinesFilter.h"
+
+#define THREAD_NUM THREAD_NUM_SAVITZKY_GOLAY
+#define FILTER_SIZE 25     // number of coefficients
+
+// filter coefficients for the savitzky golay filter
+__device__ __constant__ float coeff_float[FILTER_SIZE] = SAVITZKY_GOLAY_COEFF_F_25;
+
+//----------------------------------------------------------------
+// GPU CUDA kernel for the calculation of a savitzky golay filter
+//----------------------------------------------------------------
+
+__global__ void savitzky_golay_25_step1(const float* indata, float* outdata)
+{
+  __shared__ float shared[2*THREAD_NUM];    // shared memory for input values
+	const unsigned int block = blockIdx.x;     // access block index
+	const unsigned int thread = threadIdx.x;   // access thread index
+	const unsigned int offset = THREAD_NUM/2 - FILTER_SIZE/2; //irgwndwas
+	const unsigned int kernel2offset = 64;
+	float filterValue;    
+	// filter output value
+	
+	
+
+	int curpos = thread + block*blockDim.x;
+	//currentpos = thread + offset*block;
+  // fill shared memory with input values
+	//shared[thread + offset*block] = indata[thread + offset*block];
+	
+	
+		shared[thread] = indata[thread + block * 128 + kernel2offset];		
+		shared[thread + THREAD_NUM] = indata[thread + block * 128 + THREAD_NUM + kernel2offset];
+			
+	__syncthreads();
+	
+	float temp = 0;
+
+	
+	for(int i = 0; i < 25;i++)
+	{		
+		temp += shared[thread + i + 20] * coeff_float[i];			 
+	}
+	outdata[thread + block * 128 + kernel2offset] = temp;//shared[thread];
+	// read first value coalescing access, 4 bytes (float) read by one thread
+
+  // read second value coalescing access, 4 bytes (float) read by one thread
+	
+  // calculate filter result value
+  filterValue = 0.0;
+
+  // copy result to global memory
+}
+
+__global__ void savitzky_golay_25_step2(const float* indata, float* outdata)
+{
+  __shared__ float shared[2*THREAD_NUM];    // shared memory for input values
+	const unsigned int block = blockIdx.x;     // access block index
+	const unsigned int thread = threadIdx.x;   // access thread index
+	const unsigned int offset = THREAD_NUM/2 - FILTER_SIZE/2; //irgwndwas
+	float filterValue;    
+	// filter output value
+	
+	
+
+	int curpos = thread + block*blockDim.x;
+	//currentpos = thread + offset*block;
+  // fill shared memory with input values
+	//shared[thread + offset*block] = indata[thread + offset*block];
+	
+	
+		shared[thread] = indata[thread + block * 128];		
+		shared[thread + THREAD_NUM] = indata[thread + block * 128 + THREAD_NUM];
+			
+	__syncthreads();
+	
+	float temp = 0;
+
+	
+	for(int i = 0; i < 25;i++)
+	{		
+		temp += shared[thread + i + 20] * coeff_float[i];			 
+	}
+	outdata[thread + block * 128] = temp;//shared[thread];
+	// read first value coalescing access, 4 bytes (float) read by one thread
+
+  // read second value coalescing access, 4 bytes (float) read by one thread
+	
+  // calculate filter result value
+  filterValue = 0.0;
+
+  // copy result to global memory
+}
+
+__host__ void callSavitzkyGolay25(int first, int second, int threads, float* in, float* out, int sampleSize)
+{
+  savitzky_golay_25_step1<<<first, threads>>>(in, out);
+  savitzky_golay_25_step2<<<second, threads>>>(in, out);
+  cudaThreadSynchronize();
+  // delete invalid data at start and end of the output signal
+  cudaMemset((void*)out, 0, (FILTER_SIZE/2)*sizeof(float));
+  cudaMemset((void*)(out + sampleSize - FILTER_SIZE/2), 0, (FILTER_SIZE/2)*sizeof(float));
+}
+
+
+#endif
